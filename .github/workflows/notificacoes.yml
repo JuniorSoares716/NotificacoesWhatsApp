@@ -2,14 +2,20 @@ name: Notificacoes WhatsApp
 
 on:
   schedule:
+    # 11:00 UTC = 08:00 no horário de Brasília (UTC-3). Ajuste se quiser outro horário.
     - cron: '0 11 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      modo_teste:
+        description: 'Enviar mensagem de teste (ignora vencimentos)'
+        type: boolean
+        default: false
 
 jobs:
   enviar:
     runs-on: ubuntu-latest
     steps:
-      - name: Baixar o repositorio
+      - name: Baixar o repositório
         uses: actions/checkout@v4
 
       - name: Preparar o Node.js
@@ -17,12 +23,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Instalar dependencias
+      - name: Instalar dependências
         run: npm init -y && npm install firebase-admin
 
-      - name: Enviar notificacoes
+      - name: Enviar notificações
         run: node enviar-notificacoes.js
         env:
           SERVICE_ACCOUNT: ${{ secrets.SERVICE_ACCOUNT }}
           APP_EMAIL: ${{ secrets.APP_EMAIL }}
           DIAS_AVISO: '3,2,1'
+          MODO_TESTE: ${{ inputs.modo_teste }}
