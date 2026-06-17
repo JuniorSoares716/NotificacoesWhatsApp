@@ -46,6 +46,26 @@ async function main() {
   if (!snap.exists) { console.log('Documento do usuário não encontrado. Nada a fazer.'); return; }
   const database = snap.data();
 
+  const cfg = database.appSettings || database['__settings__'] || {};
+  const contatos = (cfg.whatsappContacts || []).filter((c) => c.number && c.apikey);
+
+  // MODO TESTE: envia uma mensagem de verificação e encerra (ignora vencimentos)
+  if (process.env.MODO_TESTE === 'true' || process.env.MODO_TESTE === '1') {
+    if (contatos.length === 0) { console.log('TESTE: nenhum contato com número + apikey cadastrado.'); return; }
+    const teste = '✅ *Teste — Controle Financeiro PRO*\n\nSe você recebeu esta mensagem, as notificações de WhatsApp estão funcionando! 🎉';
+    for (const c of contatos) {
+      try {
+        const r = await enviarCallMeBot(c.number, c.apikey, teste);
+        console.log(`TESTE enviado para ${c.name} (${c.number}): status ${r.status} | resposta: ${r.body}`);
+      } catch (err) {
+        console.error(`TESTE falhou para ${c.name}:`, err.message);
+      }
+      await sleep(4000);
+    }
+    console.log('TESTE concluído.');
+    return;
+  }
+
   const { ano, mesIndex, dia } = hojeSaoPaulo();
   const anoKey = String(ano);
   const mesNome = MESES[mesIndex];
@@ -88,11 +108,9 @@ async function main() {
   }
   msg += `\n_Controle Financeiro PRO_`;
 
-  const contatos = (database.__settings__ && database.__settings__.whatsappContacts) || [];
-  const validos = contatos.filter((c) => c.number && c.apikey);
-  if (validos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
+  if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
 
-  for (const c of validos) {
+  for (const c of contatos) {
     try {
       const r = await enviarCallMeBot(c.number, c.apikey, msg);
       console.log(`Enviado para ${c.name} (${c.number}): status ${r.status}`);
