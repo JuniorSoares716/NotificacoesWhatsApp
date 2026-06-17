@@ -103,10 +103,17 @@ async function main() {
     msg += `\n*Vencidas (não pagas):*\n`;
     vencidas.sort((a, b) => a.venc - b.venc);
     for (const { e, venc } of vencidas) {
-      msg += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc}\n`;
+      const atraso = dia - venc;
+      const txtAtraso = atraso === 1 ? 'atrasada há 1 dia' : `atrasada há ${atraso} dias`;
+      msg += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
     }
   }
-  msg += `\n_Controle Financeiro PRO_`;
+
+  const totalAVencer = aVencer.reduce((s, x) => s + (x.e.value || 0), 0);
+  const totalVencidas = vencidas.reduce((s, x) => s + (x.e.value || 0), 0);
+  if (aVencer.length) msg += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
+  if (vencidas.length) msg += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
+  msg += `\n\n_Controle Financeiro PRO_`;
 
   if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
 
