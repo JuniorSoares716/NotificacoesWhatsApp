@@ -133,6 +133,35 @@ async function main() {
   if (hoje.length) msg += `\n*Total vencendo hoje:* ${moeda(totalHoje)}`;
   if (vencidas.length) msg += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
   if (pagas.length) msg += `\n*Total pago:* ${moeda(totalPago)}`;
+
+  // ORÇAMENTOS do mês (vem junto com as notificações de despesas)
+  const budgets = database?.[anoKey]?.budgets || [];
+  const categorias = database?.[anoKey]?.expenseCategories || [];
+  const nomeCat = (id) => ((categorias.find((c) => c.id === id) || {}).name) || 'Categoria';
+  const LIMITE_APERTADO = 90; // a partir de 90% do limite, consideramos "apertado"
+
+  msg += `\n\n*Orçamentos do mês:*`;
+  if (budgets.length === 0) {
+    msg += `\n_Nenhum orçamento cadastrado._`;
+  } else {
+    const dentro = [], apertado = [], estourado = [];
+    for (const b of budgets) {
+      if (!b.limit || b.limit <= 0) continue;
+      const gasto = despesas.filter((e) => e.categoryId === b.categoryId).reduce((s, e) => s + (e.value || 0), 0);
+      const pct = Math.round((gasto / b.limit) * 100);
+      const item = { nome: nomeCat(b.categoryId), gasto, limit: b.limit, pct };
+      if (gasto > b.limit) estourado.push(item);
+      else if (pct >= LIMITE_APERTADO) apertado.push(item);
+      else dentro.push(item);
+    }
+    const linhaOk = (it) => `• ${it.nome}: ${moeda(it.gasto)} de ${moeda(it.limit)} — ${it.pct}% já utilizado.\n  Pode utilizar ${moeda(it.limit - it.gasto)}.`;
+    const linhaEstourou = (it) => `• ${it.nome}: ${moeda(it.gasto)} de ${moeda(it.limit)} — ${it.pct}% já utilizado.\n  Você estourou ${moeda(it.gasto - it.limit)} a mais do cadastrado.`;
+    const bloco = (titulo, itens, fmt) => `\n\n_${titulo}:_` + (itens.length ? '\n' + itens.map(fmt).join('\n') : `\n_Sem orçamento nessa situação._`);
+    msg += bloco('Dentro da margem', dentro, linhaOk);
+    msg += bloco('Apertado (perto do limite)', apertado, linhaOk);
+    msg += bloco('Estourado', estourado, linhaEstourou);
+  }
+
   msg += `\n\n_Controle Financeiro PRO_`;
 
   if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
