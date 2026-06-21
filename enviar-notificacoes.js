@@ -5,9 +5,8 @@
  * Variáveis de ambiente (definidas como "secrets" no GitHub):
  *   SERVICE_ACCOUNT    -> conteúdo JSON da chave de serviço do Firebase
  *   APP_EMAIL          -> e-mail de login do app (para achar o usuário)
- *   DIAS_AVISO         -> (opcional) marcos de aviso, em dias antes do vencimento.
- *                         Padrão: "3,2,1" (avisa faltando 3, 2 e 1 dia).
- *                         Ex.: "3,2,1,0" também avisa no dia do vencimento.
+ *   JANELA_DIAS        -> (opcional) quantos dias à frente contam como "vencendo em breve".
+ *                         Padrão: "5" (vence em até 5 dias). As que vencem hoje têm seção própria.
  */
 
 const admin = require('firebase-admin');
@@ -15,8 +14,7 @@ const admin = require('firebase-admin');
 const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const TZ = 'America/Sao_Paulo';
-const DIAS_AVISO = (process.env.DIAS_AVISO || '3,2,1')
-  .split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+const JANELA_DIAS = parseInt(process.env.JANELA_DIAS || '5', 10);
 
 const moeda = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -72,31 +70,42 @@ async function main() {
   const detalhes = database?.[anoKey]?.monthlyDetails?.[mesNome];
   const despesas = (detalhes && detalhes.expenses) || [];
 
-  const aVencer = [];
+  const emBreve = [];
+  const hoje = [];
   const vencidas = [];
+  const pagas = [];
   for (const e of despesas) {
-    if (e.paid) continue;
     const venc = parseInt(e.due, 10);
+    if (e.paid) {
+      pagas.push({ e, venc: isNaN(venc) ? null : venc });
+      continue;
+    }
     if (!venc || isNaN(venc)) continue;
     const diff = venc - dia;
     if (diff < 0) vencidas.push({ e, venc });
-    else if (DIAS_AVISO.includes(diff)) aVencer.push({ e, venc, diff });
+    else if (diff === 0) hoje.push({ e, venc });
+    else if (diff <= JANELA_DIAS) emBreve.push({ e, venc, diff });
   }
 
-  if (aVencer.length === 0 && vencidas.length === 0) {
-    console.log('Nenhuma conta a vencer/vencida hoje. Nada será enviado.');
+  if (emBreve.length === 0 && hoje.length === 0 && vencidas.length === 0) {
+    console.log('Nada a vencer (em breve/hoje) nem vencido. Nada será enviado.');
     return;
   }
 
   let msg = `🔔 *Lembrete de contas* — ${mesNome}/${ano}\n`;
-  if (aVencer.length) {
+
+  if (emBreve.length) {
     msg += `\n*Vencendo em breve:*\n`;
-    aVencer.sort((a, b) => a.diff - b.diff);
-    for (const { e, venc, diff } of aVencer) {
-      const quando = diff === 0 ? 'vence hoje'
-        : diff === 1 ? `vence amanhã (dia ${venc})`
-        : `faltam ${diff} dias (vence dia ${venc})`;
+    emBreve.sort((a, b) => a.diff - b.diff);
+    for (const { e, venc, diff } of emBreve) {
+      const quando = diff === 1 ? `vence amanhã (dia ${venc})` : `faltam ${diff} dias (vence dia ${venc})`;
       msg += `• ${e.name} — ${moeda(e.value)} — ${quando}\n`;
+    }
+  }
+  if (hoje.length) {
+    msg += `\n*Vencendo hoje:*\n`;
+    for (const { e, venc } of hoje) {
+      msg += `• ${e.name} — ${moeda(e.value)} — vence hoje (dia ${venc})\n`;
     }
   }
   if (vencidas.length) {
@@ -108,11 +117,22 @@ async function main() {
       msg += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
     }
   }
+  if (pagas.length) {
+    msg += `\n*Pagas:*\n`;
+    pagas.sort((a, b) => (a.venc || 0) - (b.venc || 0));
+    for (const { e } of pagas) {
+      msg += `• ${e.name} — ${moeda(e.value)}\n`;
+    }
+  }
 
-  const totalAVencer = aVencer.reduce((s, x) => s + (x.e.value || 0), 0);
+  const totalAVencer = emBreve.reduce((s, x) => s + (x.e.value || 0), 0);
+  const totalHoje = hoje.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalVencidas = vencidas.reduce((s, x) => s + (x.e.value || 0), 0);
-  if (aVencer.length) msg += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
+  const totalPago = pagas.reduce((s, x) => s + (x.e.value || 0), 0);
+  if (emBreve.length) msg += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
+  if (hoje.length) msg += `\n*Total vencendo hoje:* ${moeda(totalHoje)}`;
   if (vencidas.length) msg += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
+  if (pagas.length) msg += `\n*Total pago:* ${moeda(totalPago)}`;
   msg += `\n\n_Controle Financeiro PRO_`;
 
   if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
