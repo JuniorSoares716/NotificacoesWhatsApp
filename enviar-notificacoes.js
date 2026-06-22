@@ -117,29 +117,30 @@ async function main() {
     return;
   }
 
-  let msg = `🔔 *Lembrete de contas* — ${mesNome}/${ano}\n`;
+  // ===== Página 1: DESPESAS =====
+  let msgDespesas = `🔔 *Lembrete de contas* — ${mesNome}/${ano}\n`;
 
   if (emBreve.length) {
-    msg += `\n*Vencendo em breve:*\n`;
+    msgDespesas += `\n*Vencendo em breve:*\n`;
     emBreve.sort((a, b) => a.diff - b.diff);
     for (const { e, venc, diff } of emBreve) {
       const quando = diff === 1 ? `vence amanhã (dia ${venc})` : `faltam ${diff} dias (vence dia ${venc})`;
-      msg += `• ${e.name} — ${moeda(e.value)} — ${quando}\n`;
+      msgDespesas += `• ${e.name} — ${moeda(e.value)} — ${quando}\n`;
     }
   }
   if (hoje.length) {
-    msg += `\n*Vencendo hoje:*\n`;
+    msgDespesas += `\n*Vencendo hoje:*\n`;
     for (const { e, venc } of hoje) {
-      msg += `• ${e.name} — ${moeda(e.value)} — vence hoje (dia ${venc})\n`;
+      msgDespesas += `• ${e.name} — ${moeda(e.value)} — vence hoje (dia ${venc})\n`;
     }
   }
   if (vencidas.length) {
-    msg += `\n*Vencidas (não pagas):*\n`;
+    msgDespesas += `\n*Vencidas (não pagas):*\n`;
     vencidas.sort((a, b) => a.venc - b.venc);
     for (const { e, venc } of vencidas) {
       const atraso = dia - venc;
       const txtAtraso = atraso === 1 ? 'atrasada há 1 dia' : `atrasada há ${atraso} dias`;
-      msg += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
+      msgDespesas += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
     }
   }
 
@@ -148,21 +149,22 @@ async function main() {
   const totalVencidas = vencidas.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalPago = pagas.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalAPagar = despesas.filter((e) => !e.paid).reduce((s, e) => s + (e.value || 0), 0);
-  if (emBreve.length) msg += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
-  if (hoje.length) msg += `\n*Total vencendo hoje:* ${moeda(totalHoje)}`;
-  if (vencidas.length) msg += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
-  msg += `\n*Total a pagar (todas as despesas):* ${moeda(totalAPagar)}`;
-  if (pagas.length) msg += `\n*Total pago:* ${moeda(totalPago)}`;
+  if (emBreve.length) msgDespesas += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
+  if (hoje.length) msgDespesas += `\n*Total vencendo hoje:* ${moeda(totalHoje)}`;
+  if (vencidas.length) msgDespesas += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
+  msgDespesas += `\n*Total a pagar (todas as despesas):* ${moeda(totalAPagar)}`;
+  if (pagas.length) msgDespesas += `\n*Total pago:* ${moeda(totalPago)}`;
+  msgDespesas += `\n\n_Controle Financeiro PRO_`;
 
-  // ORÇAMENTOS do mês (vem junto com as notificações de despesas)
+  // ===== Página 2: ORÇAMENTOS =====
   const budgets = database?.[anoKey]?.budgets || [];
   const categorias = database?.[anoKey]?.expenseCategories || [];
   const nomeCat = (id) => ((categorias.find((c) => c.id === id) || {}).name) || 'Categoria';
   const LIMITE_APERTADO = 80; // a partir de 80% do limite, consideramos "apertado"
 
-  msg += `\n\n*Orçamentos do mês:*`;
+  let msgOrcamentos = `📊 *Orçamentos do mês* — ${mesNome}/${ano}`;
   if (budgets.length === 0) {
-    msg += `\n_Nenhum orçamento cadastrado._`;
+    msgOrcamentos += `\n\n_Nenhum orçamento cadastrado._`;
   } else {
     const dentro = [], apertado = [], estourado = [];
     for (const b of budgets) {
@@ -177,16 +179,18 @@ async function main() {
     const linhaOk = (it) => `• ${it.nome}: ${moeda(it.gasto)} de ${moeda(it.limit)} — ${it.pct}% já utilizado.\n  Pode utilizar ${moeda(it.limit - it.gasto)}.`;
     const linhaEstourou = (it) => `• ${it.nome}: ${moeda(it.gasto)} de ${moeda(it.limit)} — ${it.pct}% já utilizado.\n  Você estourou ${moeda(it.gasto - it.limit)} a mais do cadastrado.`;
     const bloco = (titulo, itens, fmt) => `\n\n_${titulo}:_` + (itens.length ? '\n' + itens.map(fmt).join('\n') : `\n_Sem orçamento nessa situação._`);
-    msg += bloco('Dentro da margem', dentro, linhaOk);
-    msg += bloco('Apertado (perto do limite)', apertado, linhaOk);
-    msg += bloco('Estourado', estourado, linhaEstourou);
+    msgOrcamentos += bloco('Dentro da margem', dentro, linhaOk);
+    msgOrcamentos += bloco('Apertado (perto do limite)', apertado, linhaOk);
+    msgOrcamentos += bloco('Estourado', estourado, linhaEstourou);
   }
-
-  msg += `\n\n_Controle Financeiro PRO_`;
+  msgOrcamentos += `\n\n_Controle Financeiro PRO_`;
 
   if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
 
-  const partes = dividirMensagem(msg, 1400);
+  // Página 1 = despesas, Página 2 = orçamentos (cada página é subdividida só se passar do limite da URL)
+  let partes = [];
+  for (const pagina of [msgDespesas, msgOrcamentos]) partes = partes.concat(dividirMensagem(pagina, 1400));
+
   for (const c of contatos) {
     for (let i = 0; i < partes.length; i++) {
       const texto = partes.length > 1 ? `(${i + 1}/${partes.length})\n${partes[i]}` : partes[i];
