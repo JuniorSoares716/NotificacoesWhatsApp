@@ -19,21 +19,22 @@ const JANELA_DIAS = parseInt(process.env.JANELA_DIAS || '5', 10);
 const moeda = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Divide uma mensagem longa em partes seguras (evita corte por limite de URL do CallMeBot)
-function dividirMensagem(texto, maxLen = 900) {
+// Divide uma mensagem longa em partes seguras (mede o tamanho CODIFICADO, que é o que conta na URL do CallMeBot)
+function dividirMensagem(texto, maxEnc = 1400) {
+  const enc = (s) => encodeURIComponent(s).length;
   const partes = [];
   let atual = '';
   const push = () => { if (atual) { partes.push(atual); atual = ''; } };
   for (const bloco of texto.split('\n\n')) {
-    if (bloco.length > maxLen) {
+    if (enc(bloco) > maxEnc) {
       push();
       let sub = '';
       for (const linha of bloco.split('\n')) {
-        if (sub && (sub + '\n' + linha).length > maxLen) { partes.push(sub); sub = linha; }
+        if (sub && enc(sub + '\n' + linha) > maxEnc) { partes.push(sub); sub = linha; }
         else sub = sub ? sub + '\n' + linha : linha;
       }
       if (sub) atual = sub;
-    } else if (atual && (atual + '\n\n' + bloco).length > maxLen) {
+    } else if (atual && enc(atual + '\n\n' + bloco) > maxEnc) {
       push(); atual = bloco;
     } else {
       atual = atual ? atual + '\n\n' + bloco : bloco;
@@ -141,21 +142,16 @@ async function main() {
       msg += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
     }
   }
-  if (pagas.length) {
-    msg += `\n*Pagas:*\n`;
-    pagas.sort((a, b) => (a.venc || 0) - (b.venc || 0));
-    for (const { e } of pagas) {
-      msg += `• ${e.name} — ${moeda(e.value)}\n`;
-    }
-  }
 
   const totalAVencer = emBreve.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalHoje = hoje.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalVencidas = vencidas.reduce((s, x) => s + (x.e.value || 0), 0);
   const totalPago = pagas.reduce((s, x) => s + (x.e.value || 0), 0);
+  const totalAPagar = despesas.filter((e) => !e.paid).reduce((s, e) => s + (e.value || 0), 0);
   if (emBreve.length) msg += `\n*Total a vencer:* ${moeda(totalAVencer)}`;
   if (hoje.length) msg += `\n*Total vencendo hoje:* ${moeda(totalHoje)}`;
   if (vencidas.length) msg += `\n*Total em atraso:* ${moeda(totalVencidas)}`;
+  msg += `\n*Total a pagar (todas as despesas):* ${moeda(totalAPagar)}`;
   if (pagas.length) msg += `\n*Total pago:* ${moeda(totalPago)}`;
 
   // ORÇAMENTOS do mês (vem junto com as notificações de despesas)
@@ -190,7 +186,7 @@ async function main() {
 
   if (contatos.length === 0) { console.log('Nenhum contato com número + apikey. Nada enviado.'); return; }
 
-  const partes = dividirMensagem(msg, 900);
+  const partes = dividirMensagem(msg, 1400);
   for (const c of contatos) {
     for (let i = 0; i < partes.length; i++) {
       const texto = partes.length > 1 ? `(${i + 1}/${partes.length})\n${partes[i]}` : partes[i];
