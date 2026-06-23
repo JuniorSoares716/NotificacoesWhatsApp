@@ -3,7 +3,7 @@ name: Notificacoes WhatsApp
 on:
   schedule:
     # 11:00 UTC = 08:00 no horário de Brasília (UTC-3). Ajuste se quiser outro horário.
-    - cron: '0 13 * * *'
+    - cron: '0 11 * * *'
   workflow_dispatch:
     inputs:
       modo_teste:
