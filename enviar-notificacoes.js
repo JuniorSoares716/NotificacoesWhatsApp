@@ -19,6 +19,21 @@ const JANELA_DIAS = parseInt(process.env.JANELA_DIAS || '5', 10);
 const moeda = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v || 0);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Retorna diferença em dias entre o vencimento da despesa e hoje (negativo = vencida, 0 = hoje, positivo = futuro)
+// Usa dueDate (data completa) quando disponível; cai no due (dia do mês) para dados antigos
+function getDueDiffDays(e, hoje) {
+  if (e.dueDate) return Math.round((new Date(e.dueDate + 'T00:00:00') - hoje) / 86400000);
+  if (e.due != null) return e.due - hoje.getDate();
+  return null;
+}
+
+// Formata o vencimento para exibição na mensagem
+function fmtDueMsg(e) {
+  if (e.dueDate) { const p = e.dueDate.split('-'); return `${p[2]}/${p[1]}`; }
+  if (e.due) return `dia ${e.due}`;
+  return '?';
+}
+
 // Divide uma mensagem longa em partes seguras (mede o tamanho CODIFICADO, que é o que conta na URL do CallMeBot)
 function dividirMensagem(texto, maxEnc = 1400) {
   const enc = (s) => encodeURIComponent(s).length;
@@ -89,11 +104,35 @@ async function main() {
     return;
   }
 
+  // Data de hoje à meia-noite no fuso de SP
+  function hojeMidnight() {
+    const get = (opt) => Number(new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opt }).format(new Date()));
+    const ano = get({ year: 'numeric' }), mes = get({ month: 'numeric' }), dia = get({ day: 'numeric' });
+    return new Date(ano, mes - 1, dia);
+  }
+  const hojeDate = hojeMidnight();
   const { ano, mesIndex, dia } = hojeSaoPaulo();
   const anoKey = String(ano);
   const mesNome = MESES[mesIndex];
-  const detalhes = database?.[anoKey]?.monthlyDetails?.[mesNome];
-  const despesas = (detalhes && detalhes.expenses) || [];
+
+  // Carrega despesas do mês atual
+  const despesasAtual = database?.[anoKey]?.monthlyDetails?.[mesNome]?.expenses || [];
+
+  // Carrega despesas do mês anterior (contas cadastradas no mês passado mas pagas este mês)
+  const mesPrevIdx = mesIndex === 0 ? 11 : mesIndex - 1;
+  const anoPrevKey = mesIndex === 0 ? String(ano - 1) : anoKey;
+  const mesNomePrev = MESES[mesPrevIdx];
+  const despesasPrev = database?.[anoPrevKey]?.monthlyDetails?.[mesNomePrev]?.expenses || [];
+
+  // Mescla os dois meses, deduplica por (nome + vencimento) para não contar duas vezes
+  // despesas do mês atual têm prioridade (caso a mesma conta apareça nos dois meses)
+  const seen = new Set();
+  const despesas = [];
+  for (const e of [...despesasAtual, ...despesasPrev]) {
+    const key = `${(e.name || '').toLowerCase().trim()}__${e.due}`;
+    if (!seen.has(key)) { seen.add(key); despesas.push(e); }
+  }
+  console.log(`Despesas carregadas: ${despesasAtual.length} de ${mesNome} + ${despesasPrev.length} de ${mesNomePrev} = ${despesas.length} (após dedup)`);
 
   const emBreve = [];
   const hoje = [];
@@ -105,9 +144,10 @@ async function main() {
       pagas.push({ e, venc: isNaN(venc) ? null : venc });
       continue;
     }
-    if (!venc || isNaN(venc)) continue;
-    const diff = venc - dia;
-    if (diff < 0) vencidas.push({ e, venc });
+    if (!e.dueDate && (isNaN(venc) || !venc)) continue;
+    const diff = getDueDiffDays(e, hojeDate);
+    if (diff === null) continue;
+    if (diff < 0) vencidas.push({ e, venc, diff });
     else if (diff === 0) hoje.push({ e, venc });
     else if (diff <= JANELA_DIAS) emBreve.push({ e, venc, diff });
   }
@@ -123,24 +163,24 @@ async function main() {
   if (emBreve.length) {
     msgDespesas += `\n*Vencendo em breve:*\n`;
     emBreve.sort((a, b) => a.diff - b.diff);
-    for (const { e, venc, diff } of emBreve) {
-      const quando = diff === 1 ? `vence amanhã (dia ${venc})` : `faltam ${diff} dias (vence dia ${venc})`;
+    for (const { e, diff } of emBreve) {
+      const quando = diff === 1 ? `vence amanhã (${fmtDueMsg(e)})` : `faltam ${diff} dias (vence ${fmtDueMsg(e)})`;
       msgDespesas += `• ${e.name} — ${moeda(e.value)} — ${quando}\n`;
     }
   }
   if (hoje.length) {
     msgDespesas += `\n*Vencendo hoje:*\n`;
-    for (const { e, venc } of hoje) {
-      msgDespesas += `• ${e.name} — ${moeda(e.value)} — vence hoje (dia ${venc})\n`;
+    for (const { e } of hoje) {
+      msgDespesas += `• ${e.name} — ${moeda(e.value)} — vence hoje (${fmtDueMsg(e)})\n`;
     }
   }
   if (vencidas.length) {
     msgDespesas += `\n*Vencidas (não pagas):*\n`;
-    vencidas.sort((a, b) => a.venc - b.venc);
-    for (const { e, venc } of vencidas) {
-      const atraso = dia - venc;
+    vencidas.sort((a, b) => a.diff - b.diff);
+    for (const { e, diff } of vencidas) {
+      const atraso = Math.abs(diff);
       const txtAtraso = atraso === 1 ? 'atrasada há 1 dia' : `atrasada há ${atraso} dias`;
-      msgDespesas += `• ${e.name} — ${moeda(e.value)} — venceu dia ${venc} (${txtAtraso})\n`;
+      msgDespesas += `• ${e.name} — ${moeda(e.value)} — venceu ${fmtDueMsg(e)} (${txtAtraso})\n`;
     }
   }
 
@@ -169,7 +209,8 @@ async function main() {
     const dentro = [], apertado = [], estourado = [];
     for (const b of budgets) {
       if (!b.limit || b.limit <= 0) continue;
-      const gasto = despesas.filter((e) => e.categoryId === b.categoryId).reduce((s, e) => s + (e.value || 0), 0);
+      // Orçamento usa só o mês atual (competência): despesas de junho contam em junho, não em julho
+      const gasto = despesasAtual.filter((e) => e.categoryId === b.categoryId).reduce((s, e) => s + (e.value || 0), 0);
       const pct = Math.round((gasto / b.limit) * 100);
       const item = { nome: nomeCat(b.categoryId), gasto, limit: b.limit, pct };
       if (gasto > b.limit) estourado.push(item);
